@@ -8,6 +8,38 @@ from functools import partial
 from torch import distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 import argparse
+from torch.jit import script
+from torch.nn import *
+
+@script
+def _mish_jit_fwd(x): return x.mul(torch.tanh(F.softplus(x)))
+
+@script
+def _mish_jit_bwd(x, grad_output):
+    x_sigmoid = torch.sigmoid(x)
+    x_tanh_sp = F.softplus(x).tanh()
+    return grad_output.mul(x_tanh_sp + x * x_sigmoid * (1 - x_tanh_sp * x_tanh_sp))
+
+class MishJitAutoFn(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        ctx.save_for_backward(x)
+        return _mish_jit_fwd(x)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x = ctx.saved_variables[0]
+        return _mish_jit_bwd(x, grad_output)
+
+#Cell
+def mish(x): return MishJitAutoFn.apply(x)
+
+#Cell
+class MishJit(Module):
+    def forward(self, x): return MishJitAutoFn.apply(x)
+
+
+
 
 # We use pytorch's distributed package with NCCL for inter-gpu communication
 # Define the process group
@@ -105,7 +137,8 @@ def run_benchmark(lr_scaler=1.0,
                                                                     eigen_vectors=eigen_vectors),
             scale=1 / 16,
             types={
-                nn.ReLU: partial(nn.CELU, 0.3),
+                #nn.ReLU: partial(nn.CELU, 0.3),
+                nn.ReLU: MishJit,
                 BatchNorm: partial(GhostBatchNorm, num_splits=16, weight=False)
             }
 
