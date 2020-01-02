@@ -31,10 +31,8 @@ class MishJitAutoFn(torch.autograd.Function):
         x = ctx.saved_variables[0]
         return _mish_jit_bwd(x, grad_output)
 
-#Cell
 def mish(x): return MishJitAutoFn.apply(x)
 
-#Cell
 class MishJit(Module):
     def forward(self, x): return MishJitAutoFn.apply(x)
 
